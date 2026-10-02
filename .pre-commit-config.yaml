@@ -1,0 +1,51 @@
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.104.0
+    hooks:
+      - id: terraform_fmt
+        pass_filenames: true
+        args:
+          - --args=-recursive
+
+      - id: terraform_validate
+        args:
+          - --tf-init-args=-lockfile=update
+          - --hook-config=--retry-once-with-cleanup=true
+          - --hook-config=--always-regenerate-lockfile=true
+
+      - id: terraform_tflint
+        args:
+          - --args=--recursive
+          - --args=--minimum-failure-severity=warning
+          - --args=--format=compact
+          - --hook-config=--delegate-chdir
+
+      - id: terraform_trivy
+        args:
+          - --args=--format=json
+          - --args=--skip-dirs="**/.terraform"
+
+      - id: terraform_checkov
+        args:
+          - --args=--quiet
+
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
+          - --hook-config=--create-file-if-not-exist=true
+          - --hook-config=--add-to-existing-file=true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+      - id: end-of-file-fixer
+        exclude: (?i)README(\..*)?$
