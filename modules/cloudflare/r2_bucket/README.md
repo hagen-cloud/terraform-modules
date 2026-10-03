@@ -43,26 +43,26 @@ needs a resource reference or the effective bucket configuration.
 ## Requirements
 
 | Name | Version |
-| ---- | ------- |
+|------|---------|
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.15.8, < 2.0.0 |
 | <a name="requirement_cloudflare"></a> [cloudflare](#requirement\_cloudflare) | 5.26.0 |
 
 ## Providers
 
 | Name | Version |
-| ---- | ------- |
+|------|---------|
 | <a name="provider_cloudflare"></a> [cloudflare](#provider\_cloudflare) | 5.26.0 |
 
 ## Resources
 
 | Name | Type |
-| ---- | ---- |
+|------|------|
 | [cloudflare_r2_bucket.this](https://registry.terraform.io/providers/cloudflare/cloudflare/5.26.0/docs/resources/r2_bucket) | resource |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
-| ---- | ----------- | ---- | ------- | :------: |
+|------|-------------|------|---------|:--------:|
 | <a name="input_account_id"></a> [account\_id](#input\_account\_id) | Account ID | `string` | n/a | yes |
 | <a name="input_jurisdiction"></a> [jurisdiction](#input\_jurisdiction) | Jurisdiction where objects in this bucket are guaranteed to be stored. Available values: 'default', 'eu', 'fedramp', 'us' | `string` | `null` | no |
 | <a name="input_location"></a> [location](#input\_location) | Location of the bucket. Available values: apac, eeur, enam, weur, wnam, oc. | `string` | `null` | no |

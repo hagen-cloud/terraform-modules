@@ -104,11 +104,8 @@ jobs:
           ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || github.sha }}
           persist-credentials: false
 
-      - name: Validate without a backend
-        uses: dflook/terraform-validate@v3.1.0
-        with:
-          path: modules/${{ matrix.module }}
-
+      # Check docs before Terraform initialization can modify tracked lockfiles.
+      # This action embeds terraform-docs 0.20.0; use the same version locally.
       - name: Check generated documentation
         uses: terraform-docs/gh-actions@v1.4.1
         with:
@@ -118,6 +115,11 @@ jobs:
           template: ''
           git-push: 'false'
           fail-on-diff: 'true'
+
+      - name: Validate without a backend
+        uses: dflook/terraform-validate@v3.1.0
+        with:
+          path: modules/${{ matrix.module }}
 
       - name: Run unit tests
         id: tests
