@@ -49,3 +49,11 @@ repos:
 
       - id: end-of-file-fixer
         exclude: (?i)README(\..*)?$
+
+  - repo: local
+    hooks:
+      - id: forbid-deployment-artifacts
+        name: Do not commit deployment artifacts
+        language: fail
+        entry: State, plans, provider caches, CLI credentials, and deployment variable files do not belong in this module library.
+        files: '(^|/)\.terraform/|(^|/)[^/]*\.tfstate(?:\.|$)|\.(?:tfplan|plan)$|(^|/)(?:planout|tfplan|\.terraformrc|terraform\.rc)$|(?<!\.auto)\.tfvars(?:\.json)?$'
