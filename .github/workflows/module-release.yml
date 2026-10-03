@@ -1,0 +1,74 @@
+name: Module release
+
+on:
+  # Only the trusted base-branch workflow runs, and only merged PRs proceed.
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    uses: ./.github/workflows/terraform-ci.yml
+
+  tag:
+    name: Release / ${{ matrix.module }}
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        module: ${{ fromJSON(needs.checks.outputs.modules) }}
+    steps:
+      - name: Checkout the merged commit and tag history
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check whether this module changed
+        id: changes
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          filters: |
+            module:
+              - 'modules/${{ matrix.module }}/**'
+
+      - name: Wait for earlier releases before choosing the next version
+        if: steps.changes.outputs.module == 'true'
+        uses: softprops/turnstyle@v3.3.3
+        with:
+          same-branch-only: false
+          abort-after-seconds: 1500
+          poll-interval-seconds: 15
+
+      - name: Increment this module's version and create its tag
+        if: steps.changes.outputs.module == 'true'
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BUMP: ${{ contains(github.event.pull_request.labels.*.name, 'release:major') && 'major' || contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_BRANCHES: '.*'
+          TAG_PREFIX: ${{ matrix.module }}/v
+          BRANCH_HISTORY: last
+          # Labels control the version; disable commit-message bump conventions.
+          MAJOR_STRING_TOKEN: ${{ format('__label_only_major_{0}__', github.run_id) }}
+          MINOR_STRING_TOKEN: ${{ format('__label_only_minor_{0}__', github.run_id) }}
+          PATCH_STRING_TOKEN: ${{ format('__label_only_patch_{0}__', github.run_id) }}
+          NONE_STRING_TOKEN: ${{ format('__label_only_none_{0}__', github.run_id) }}
