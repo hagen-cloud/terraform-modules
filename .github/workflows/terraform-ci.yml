@@ -232,7 +232,7 @@ jobs:
 
       - name: Update the consolidated PR report
         if: ${{ !cancelled() && env.REPORT_COMMENT_MODE == 'always' }}
-        uses: marocchino/sticky-pull-request-comment@v2.9.4
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: terraform-ci-overview
           message: |
