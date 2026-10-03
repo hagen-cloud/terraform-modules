@@ -1,0 +1,270 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      modules:
+        description: Modules validated by this workflow and eligible for release
+        value: ${{ jobs.hygiene.outputs.modules }}
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
+
+env:
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  # Forks and Dependabot keep summaries without attempting privileged comments.
+  REPORT_COMMENT_MODE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && 'always' || 'off' }}
+
+jobs:
+  hygiene:
+    name: Repository checks
+    outputs:
+      # Maintain the module list only here; validation and release share it.
+      modules: '["cloudflare/r2_bucket"]'
+    permissions:
+      contents: read
+      issues: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Terraform for the existing lint hook
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: '1.16.1'
+          terraform_wrapper: false
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6.3.2
+        with:
+          tflint_version: '0.64.0'
+
+      - name: Check file hygiene, deployment artifacts, and TFLint
+        uses: j178/prek-action@v3.0.0
+        env:
+          SKIP: terraform_fmt,terraform_validate,terraform_trivy,terraform_checkov,terraform_docs
+        with:
+          prek-version: '0.5.4'
+
+      - name: Lint workflows
+        uses: raven-actions/actionlint@v2.2.0
+        with:
+          version: '1.7.12'
+          shellcheck: false
+          pyflakes: false
+
+      - name: Allow at most one release label
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: mheap/github-action-required-labels@v5.6.0
+        with:
+          mode: maximum
+          count: 1
+          labels: release:patch,release:minor,release:major
+          add_comment: false
+
+      - name: Check recursive Terraform formatting
+        uses: dflook/terraform-fmt-check@v3.1.0
+        env:
+          TERRAFORM_VERSION: '1.16.1'
+        with:
+          path: .
+
+  modules:
+    needs: hygiene
+    name: Module / ${{ matrix.module }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        module: ${{ fromJSON(needs.hygiene.outputs.modules) }}
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || github.sha }}
+          persist-credentials: false
+
+      # Check docs before Terraform initialization can modify tracked lockfiles.
+      # This action embeds terraform-docs 0.20.0; use the same version locally.
+      - name: Check generated documentation
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: modules/${{ matrix.module }}
+          config-file: .terraform-docs.yml
+          output-method: ''
+          template: ''
+          git-push: 'false'
+          fail-on-diff: 'true'
+
+      - name: Validate without a backend
+        uses: dflook/terraform-validate@v3.1.0
+        with:
+          path: modules/${{ matrix.module }}
+
+      - name: Run unit tests
+        id: tests
+        uses: dflook/terraform-test@v3.1.0
+        with:
+          path: modules/${{ matrix.module }}
+          test_directory: tests/unit
+
+      - name: Summarize unit test results
+        id: test-report
+        if: ${{ !cancelled() && steps.tests.outputs.junit-xml-path != '' }}
+        uses: dorny/test-reporter@v3.0.0
+        with:
+          name: Unit tests / ${{ matrix.module }}
+          report-title: Unit tests / ${{ matrix.module }}
+          path: ${{ steps.tests.outputs.junit-xml-path }}
+          reporter: java-junit
+          use-actions-summary: true
+          list-tests: failed
+
+  security:
+    name: Infrastructure and workflow security
+    outputs:
+      trivy: ${{ steps.trivy.outcome }}
+      checkov: ${{ steps.checkov.outcome }}
+      secrets: ${{ steps.secrets.outcome }}
+      report: ${{ steps.security-report.outcome }}
+      passed: ${{ steps.security-report.outputs.passed }}
+      failed: ${{ steps.security-report.outputs.failed }}
+      skipped: ${{ steps.security-report.outputs.skipped }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Scan infrastructure configuration
+        id: trivy
+        env:
+          TRIVY_INCLUDE_NON_FAILURES: 'true'
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          version: 'v0.75.0'
+          scan-type: config
+          scan-ref: .
+          skip-dirs: '**/.terraform,.cache'
+          exit-code: '1'
+          format: template
+          # setup-trivy installs upstream templates beside its binary on Ubuntu.
+          template: '@/home/runner/.local/bin/trivy-bin/contrib/junit.tpl'
+          output: trivy-iac.xml
+
+      - name: Scan Terraform and workflow policies
+        id: checkov
+        if: ${{ !cancelled() }}
+        uses: bridgecrewio/checkov-action@v12.3128.0
+        with:
+          directory: .
+          framework: terraform,github_actions
+          skip_path: .terraform,.cache
+          quiet: true
+          soft_fail: false
+          skip_results_upload: true
+          output_format: junitxml
+          output_file_path: checkov.xml,
+
+      - name: Scan files for leaked credentials
+        id: secrets
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          version: 'v0.75.0'
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          skip-dirs: '.git,**/.terraform,.cache'
+          exit-code: '1'
+          format: table
+
+      - name: Summarize security policy results
+        id: security-report
+        if: ${{ !cancelled() }}
+        uses: dorny/test-reporter@v3.0.0
+        with:
+          name: Security policies / Trivy and Checkov
+          report-title: Security policies / Trivy and Checkov
+          badge-title: policies
+          path: trivy-iac.xml,checkov.xml
+          reporter: java-junit
+          use-actions-summary: true
+          list-tests: failed
+
+  quality-gate:
+    name: Terraform CI / required
+    permissions:
+      pull-requests: write
+    needs: [hygiene, modules, security]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to succeed
+        uses: re-actors/alls-green@v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+      - name: Update the consolidated PR report
+        if: ${{ !cancelled() && env.REPORT_COMMENT_MODE == 'always' }}
+        uses: marocchino/sticky-pull-request-comment@v2.9.4
+        with:
+          header: terraform-ci-overview
+          message: |
+            ## Terraform CI
+
+            | Check | Result |
+            | --- | --- |
+            | File hygiene, TFLint, workflows, labels and formatting | ${{ needs.hygiene.result }} |
+            | Module validation, documentation and unit tests | ${{ needs.modules.result }} |
+            | Security policies and secret detection | ${{ needs.security.result }} |
+
+            ### Unit tests
+
+            Module job result: **${{ needs.modules.result }}**.
+            Registered modules: ${{ join(fromJSON(needs.hygiene.outputs.modules || '[]'), ', ') || 'unavailable' }}.
+            Each module's passed, failed and skipped test counts and failure details are available in this run's summaries.
+            A failed module job may mean documentation or validation prevented its tests from running.
+
+            ### Security
+
+            | Scanner | Result |
+            | --- | --- |
+            | Trivy configuration | ${{ needs.security.outputs.trivy || 'unavailable' }} |
+            | Checkov Terraform and workflow policies | ${{ needs.security.outputs.checkov || 'unavailable' }} |
+            | Secret detection | ${{ needs.security.outputs.secrets || 'unavailable' }} |
+            | Policy report | ${{ needs.security.outputs.report || 'unavailable' }} |
+
+            | Passed policies | Failed policies | Skipped policies |
+            | --- | --- | --- |
+            | ${{ needs.security.outputs.passed || 'unavailable' }} | ${{ needs.security.outputs.failed || 'unavailable' }} | ${{ needs.security.outputs.skipped || 'unavailable' }} |
+
+            Policy counts cover reports produced by Trivy and Checkov. Scanner errors can leave a partial report; zero findings do not prove coverage.
+            Secret values are not included in this comment.
+
+            [Open this run's reports, summaries and logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) (attempt ${{ github.run_attempt }}).
