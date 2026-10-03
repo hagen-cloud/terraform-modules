@@ -4,7 +4,7 @@ Last reviewed: 2026-10-03.
 
 ## Purpose and scope
 
-The workflows validate reusable modules and publish module-specific Git tags after a pull request is merged into the default branch. They do not deploy infrastructure, configure a state backend, or receive cloud deployment credentials.
+The workflows validate reusable modules and publish module-specific Git tags and GitHub Releases after a pull request is merged into the default branch. They do not deploy infrastructure, configure a state backend, or receive cloud deployment credentials.
 
 All workflow steps use maintained actions. There are no repository-owned CI scripts, inline scripts, or `run` steps. Tools and actions may use Python, shell, or JavaScript internally; their implementation belongs to the upstream projects.
 
@@ -50,7 +50,7 @@ outputs:
 
 Add a new identifier to this JSON array when its module is ready. The module test matrix reads this output, and the reusable workflow exposes the same list to the release workflow. The release workflow builds each path filter directly from the identifier. No separate inventory file or repeated path registration is required.
 
-An identifier must be unique and stable. Use simple directory names with letters, numbers, underscores, hyphens, and slashes. Avoid regex metacharacters because the tagging action matches a tag prefix using a regular expression.
+An identifier must be unique and stable. Use simple directory names with letters, numbers, underscores, hyphens, and slashes. Use lowercase names. Publication replaces every `/` and `_` with `-`, then appends `-v<version>`. Identifiers must also be unique after this normalization: `aws/foo_bar` and `aws/foo-bar` would collide. Review this when registering or renaming a module. Avoid regex metacharacters because the tagging action matches a tag prefix using a regular expression.
 
 Currently, only the versioned Cloudflare module is registered. Local untracked Hetzner work has not been enrolled or modified. When that module is ready, add `hetzner/network` to that one list and provide its documentation and tests.
 
@@ -82,9 +82,11 @@ The declarative `language: fail` pre-commit hook blocks tracked state, common sa
 2. Process the registered modules one at a time with `max-parallel: 1`.
 3. Use an inline paths-filter configuration to check whether the current module changed in the PR. Skip publication for unchanged modules.
 4. Wait for earlier release runs to finish before choosing a version. Turnstyle prevents concurrent runs from selecting the same next version; a timeout fails rather than bypassing the queue.
-5. Read the highest matching semantic version tag for that module and create the next tag on the merge commit.
+5. Replace `/` and `_` in the module identifier with `-`, read the highest matching semantic version tag for that prefix, and create the next tag on the merge commit.
+6. Build release notes with `mikepenz/release-changelog-builder-action`, using `.github/release-notes.json` for categories and the entry template. The workflow wraps those changes with module identity, a pinned usage example, documentation, and validation links.
+7. Publish a GitHub Release for the exact tag with `softprops/action-gh-release`. Releases are not marked as the repository-wide latest release because each module has its own version stream.
 
-Only the tagging job receives `contents: write`. The hygiene job receives `issues: read` to inspect PR labels. The same release job uses `pull-requests: read` for path detection and `actions: read` for queue coordination. Unmerged PRs, merges into other branches, direct pushes, and changes outside registered module paths do not publish module tags.
+Only the release job receives `contents: write`. The hygiene job receives `issues: read` to inspect PR labels. The same release job uses `pull-requests: read` for path detection and `actions: read` for queue coordination. Unmerged PRs, merges into other branches, direct pushes, and changes outside registered module paths do not publish module tags.
 
 Changes anywhere under a registered module path, including documentation, tests, and deletions, count as changes to that module. Root README and CI-only changes do not release unrelated modules. A tag identifies a commit of the whole repository; its prefix denotes the module whose version is being released.
 
@@ -106,18 +108,20 @@ The selected label applies to every changed registered module in that PR. If mod
 
 Version streams are independent:
 
-- `cloudflare/r2_bucket/v0.2.3` becomes `cloudflare/r2_bucket/v0.2.4` on a patch change.
-- A registered `hetzner/network/v0.1.7` becomes `hetzner/network/v0.1.8` on the same patch PR.
+- `cloudflare-r2-bucket-v0.2.3` becomes `cloudflare-r2-bucket-v0.2.4` on a patch change.
+- A registered `hetzner-network-v0.1.7` becomes `hetzner-network-v0.1.8` on the same patch PR.
 
 There is no repository-wide counter shared between modules. Without any matching tag, the baseline is `0.0.0`: the first patch tag is `0.0.1`, the first minor tag is `0.1.0`, and the first major tag is `1.0.0`. This baseline is not a production-readiness claim.
 
-Keep the prefix `<module identifier>/v` stable. Existing tags with another naming scheme are not adopted automatically. At the time of this local refactor, the checkout had no existing tags.
+Keep the normalized prefix `<provider>-<module>-v` stable. Renaming directories may change that prefix and therefore requires a release migration. Directory paths remain unchanged by tag normalization.
+
+The first published tag used the legacy name `cloudflare/r2_bucket/v0.0.1` on commit `e815a5392349482746b37a3dff2967fddc81d610`. Preserve that tag and seed `cloudflare-r2-bucket-v0.0.1` at the same commit before activating the new workflow. This retains existing consumers and lets the next patch release continue at `cloudflare-r2-bucket-v0.0.2`. Changing only the prefix would otherwise start a new version stream. CI-only merges do not publish a module release.
 
 Consumers select a module subdirectory and its tag together, for example:
 
 ```hcl
 module "bucket" {
-  source = "git::https://github.com/hagen-cloud/terraform-modules.git//modules/cloudflare/r2_bucket?ref=cloudflare/r2_bucket/v0.2.4"
+  source = "git::https://github.com/hagen-cloud/terraform-modules.git//modules/cloudflare/r2_bucket?ref=cloudflare-r2-bucket-v0.2.4"
 
   # Supply the inputs required by the selected module version.
 }
@@ -125,17 +129,25 @@ module "bucket" {
 
 The source is illustrative; the version in this example is not a published release.
 
+### Release descriptions
+
+Notes describe the merged PR that triggered this publication. The changelog action compares the PR base SHA with the merge SHA, fetches PRs through those commits, and filters commits by `modules/<identifier>/`. Both refs are explicit, so the action cannot accidentally select a different module's latest tag. The same bounds work for a first release and a retry. The trailing slash in the path prevents matching sibling names. The action accepts path prefixes here, not glob patterns.
+
+Entries include reviewed PR titles, links, and authors. Conventional Commit prefixes and PR labels categorize features, fixes, dependencies, documentation, and maintenance; unmatched entries remain visible. They do not change the version increment policy. A PR that changes several modules may appear in each affected module's release, with the same PR title; keep titles useful and describe per-module impact and migration steps in the PR body and module documentation.
+
+The template does not use an AI service, infer compatibility from code, or copy the whole PR body into every module's release. Release notes are reproducible from GitHub metadata and require only `GITHUB_TOKEN`. Human review remains responsible for explaining compatibility and upgrade requirements. A future AI-assisted PR summary can feed the same process after review without giving an AI publication credentials.
+
 ### Failures and recovery
 
-A failed check prevents tagging. The release workflow may publish some module tags before another module fails; it is not an atomic multi-module transaction. Review the job results before retrying.
+A failed check prevents tagging. Tag creation and GitHub Release publication are separate API operations: a notes or publication failure can leave a valid tag without a Release, and fails the job. Retry the failed release job before newer module releases. The release workflow may publish some module tags before another module fails; it is not an atomic multi-module transaction. Review the job results before retrying.
 
-Re-running a tagging job immediately after the same commit has already received that module's latest tag skips the increment. Retry failed jobs before newer merges are released. Do not rerun an older completed release after newer tags exist: the tagging action compares against the latest tag and can create an additional version for the old commit. This is an upstream action limitation, not general idempotence.
+Re-running the release job immediately after the same commit has already received that module's latest tag skips the increment, rebuilds notes with the same commit bounds, and creates or updates the Release for that tag. The body is replaced rather than appended, preventing duplicate notes. Do not hand-edit generated release bodies if a retry is expected. Retry failed jobs before newer merges are released. Do not rerun an older completed release after newer tags exist: the tagging action compares against the latest tag and can create an additional version for the old commit. This is an upstream action limitation, not general idempotence.
 
 The workflows do not move or delete existing tags. For an incorrect release, prefer a corrective PR and a new tag. Any exceptional tag deletion requires checking consumers first. If a run times out while waiting for previous releases, inspect the previous runs and rerun the failed jobs; do not bypass the queue.
 
 GitHub's token permission settings or tag rules may block tag creation. Grant only the required tagging permission and compatible tag-rule access. No personal access token is configured.
 
-Tags created with `GITHUB_TOKEN` do not normally trigger other workflows. This design does not depend on a tag-triggered workflow for completing a release.
+Tags created with `GITHUB_TOKEN` do not normally trigger other workflows. The GitHub Release is created in the same job, immediately after tagging and generating notes; this design does not depend on a tag-triggered workflow.
 
 ## Dependabot and maintenance
 
@@ -147,11 +159,11 @@ Keep the module list, tag prefixes, provider requirements, and test policy under
 
 ## Validation status
 
-The workflow changes are local and intentionally uncommitted. The 2026-10-03 simplification removes the module inventory file, reduces CI from six jobs to four and release from three jobs to two, and removes the duplicate post-merge push trigger. Actionlint and YAML/output-wiring checks passed after this simplification; Terraform implementation was not changed. Passed locally: YAML parsing, actionlint, pre-commit configuration validation, file hygiene hooks, TFLint, absence of repository scripts and inline scripts, module registration consistency, and action input contracts against every selected upstream manifest. On 2026-10-03, all replacement release tags were verified to resolve to the previously configured commits, and actionlint was rerun after changing the references. In an isolated copy, Terraform formatting, backend-free initialization, validation, and both Cloudflare mock test runs passed. The original module files were not changed.
+The original R2 module release completed successfully in [run 37147045882](https://github.com/hagen-cloud/terraform-modules/actions/runs/37147045882), including repository checks, module documentation, backend-free validation, mock tests, security scans, and publication of the legacy `cloudflare/r2_bucket/v0.0.1` tag. This confirms the original single-module merge-and-tag flow; it does not validate concurrent multi-module releases or fork behavior.
 
-The artifact-free reporting change was checked with actionlint and upstream action input manifests. The selected reporter was also executed locally against synthetic JUnit results: pass/fail/skip counts and failure messages appeared in the summary, and a failed test retained a nonzero exit code. No Terraform implementation changed for reporting.
+For normalized tags and GitHub Releases, actionlint 1.7.12 passed locally. The exact pinned normalization action was executed against `cloudflare/r2_bucket` and `hetzner/network`. The pinned changelog action was executed locally against real GitHub history: the initial R2 PR was categorized as a feature, an extended range excluded the unrelated Actions/pre-commit PRs, and an unrelated-only range produced no module entries. Repeating the initial range produced identical notes. The rendered release body was reviewed for resolved placeholders, the pinned source, and documentation/run links.
 
-End-to-end Actions execution, PR comment permissions, report rendering on GitHub, queue behavior, fork PR behavior, and real tag publication must be validated after the workflows are committed through the normal PR process. No remote workflow or tag is created during this refactor.
+GitHub CI must pass on the implementation PR before merge. Automated Release publication with the workflow's `GITHUB_TOKEN` still needs its first module-changing merge; a workflow-only PR does not publish a module version. Keep concurrency, fork behavior, tag-rule permissions, and recovery after a newer release as explicit operational limitations described above.
 
 ## References
 
@@ -166,6 +178,9 @@ End-to-end Actions execution, PR comment permissions, report rendering on GitHub
 - [paths-filter](https://github.com/dorny/paths-filter)
 - [Turnstyle](https://github.com/softprops/turnstyle)
 - [Tagging action](https://github.com/anothrNick/github-tag-action)
+- [String normalization action](https://github.com/frabert/replace-string-action)
+- [Release changelog builder](https://github.com/mikepenz/release-changelog-builder-action)
+- [GitHub Release action](https://github.com/softprops/action-gh-release)
 - [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 - [Terraform provider mocks](https://developer.hashicorp.com/terraform/language/tests/mocking)
 - [GitHub token workflow trigger behavior](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow)
