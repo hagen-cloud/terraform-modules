@@ -89,7 +89,6 @@ jobs:
     name: Module / ${{ matrix.module }}
     permissions:
       contents: read
-      pull-requests: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -140,27 +139,18 @@ jobs:
           use-actions-summary: true
           list-tests: failed
 
-      - name: Update the unit test PR report
-        if: ${{ !cancelled() && env.REPORT_COMMENT_MODE == 'always' }}
-        uses: marocchino/sticky-pull-request-comment@v2.9.4
-        with:
-          header: unit-tests-${{ matrix.module }}
-          message: |
-            ## Unit tests / ${{ matrix.module }}
-
-            Execution: **${{ steps.tests.outcome }}**. Report: **${{ steps.test-report.outcome }}**.
-
-            | Passed | Failed | Skipped |
-            | --- | --- | --- |
-            | ${{ steps.test-report.outputs.passed || 'unavailable' }} | ${{ steps.test-report.outputs.failed || 'unavailable' }} | ${{ steps.test-report.outputs.skipped || 'unavailable' }} |
-
-            [Results and failure details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) (attempt ${{ github.run_attempt }}).
-
   security:
     name: Infrastructure and workflow security
+    outputs:
+      trivy: ${{ steps.trivy.outcome }}
+      checkov: ${{ steps.checkov.outcome }}
+      secrets: ${{ steps.secrets.outcome }}
+      report: ${{ steps.security-report.outcome }}
+      passed: ${{ steps.security-report.outputs.passed }}
+      failed: ${{ steps.security-report.outputs.failed }}
+      skipped: ${{ steps.security-report.outputs.skipped }}
     permissions:
       contents: read
-      pull-requests: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -226,29 +216,6 @@ jobs:
           use-actions-summary: true
           list-tests: failed
 
-      - name: Update the security PR report
-        if: ${{ !cancelled() && env.REPORT_COMMENT_MODE == 'always' }}
-        uses: marocchino/sticky-pull-request-comment@v2.9.4
-        with:
-          header: security-policies
-          message: |
-            ## Security policies
-
-            | Scanner | Result |
-            | --- | --- |
-            | Trivy configuration | ${{ steps.trivy.outcome }} |
-            | Checkov Terraform and workflow policies | ${{ steps.checkov.outcome }} |
-            | Secret detection | ${{ steps.secrets.outcome }} |
-            | Policy report | ${{ steps.security-report.outcome }} |
-
-            | Passed policies | Failed policies | Skipped policies |
-            | --- | --- | --- |
-            | ${{ steps.security-report.outputs.passed || 'unavailable' }} | ${{ steps.security-report.outputs.failed || 'unavailable' }} | ${{ steps.security-report.outputs.skipped || 'unavailable' }} |
-
-            Counts cover the policy reports produced by Trivy and Checkov. Scanner errors can leave a partial report; zero findings do not prove coverage.
-            Secret values are not included in this comment.
-            [Results and policy failure details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) (attempt ${{ github.run_attempt }}).
-
   quality-gate:
     name: Terraform CI / required
     permissions:
@@ -263,7 +230,7 @@ jobs:
         with:
           jobs: ${{ toJSON(needs) }}
 
-      - name: Update the PR overview
+      - name: Update the consolidated PR report
         if: ${{ !cancelled() && env.REPORT_COMMENT_MODE == 'always' }}
         uses: marocchino/sticky-pull-request-comment@v2.9.4
         with:
@@ -277,6 +244,27 @@ jobs:
             | Module validation, documentation and unit tests | ${{ needs.modules.result }} |
             | Security policies and secret detection | ${{ needs.security.result }} |
 
-            Test and security policy counts are published in their report comments when available.
-            A skipped or failed job may prevent a report from being generated; it does not mean zero findings.
-            [Open this run's summaries and logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) (attempt ${{ github.run_attempt }}).
+            ### Unit tests
+
+            Module job result: **${{ needs.modules.result }}**.
+            Registered modules: ${{ join(fromJSON(needs.hygiene.outputs.modules || '[]'), ', ') || 'unavailable' }}.
+            Each module's passed, failed and skipped test counts and failure details are available in this run's summaries.
+            A failed module job may mean documentation or validation prevented its tests from running.
+
+            ### Security
+
+            | Scanner | Result |
+            | --- | --- |
+            | Trivy configuration | ${{ needs.security.outputs.trivy || 'unavailable' }} |
+            | Checkov Terraform and workflow policies | ${{ needs.security.outputs.checkov || 'unavailable' }} |
+            | Secret detection | ${{ needs.security.outputs.secrets || 'unavailable' }} |
+            | Policy report | ${{ needs.security.outputs.report || 'unavailable' }} |
+
+            | Passed policies | Failed policies | Skipped policies |
+            | --- | --- | --- |
+            | ${{ needs.security.outputs.passed || 'unavailable' }} | ${{ needs.security.outputs.failed || 'unavailable' }} | ${{ needs.security.outputs.skipped || 'unavailable' }} |
+
+            Policy counts cover reports produced by Trivy and Checkov. Scanner errors can leave a partial report; zero findings do not prove coverage.
+            Secret values are not included in this comment.
+
+            [Open this run's reports, summaries and logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) (attempt ${{ github.run_attempt }}).
