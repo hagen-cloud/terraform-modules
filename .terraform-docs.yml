@@ -1,6 +1,7 @@
 formatter: "markdown"
 
-version: ""
+# Keep local hooks and terraform-docs/gh-actions@v1.4.1 on the same generator version.
+version: "= 0.20.0"
 
 header-from: main.tf
 
