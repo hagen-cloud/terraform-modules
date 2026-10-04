@@ -1,0 +1,61 @@
+{
+  "template": "## Changes\n\n#{{CHANGELOG}}\n\n#{{UNCATEGORIZED}}",
+  "pr_template": "- #{{TITLE}} ([##{{NUMBER}}](#{{URL}})) by @#{{AUTHOR}}",
+  "empty_template": "## Changes\n\nNo merged pull requests matched this module path in the selected range. Review the linked merge and workflow before upgrading.",
+  "categories": [
+    {
+      "title": "### Features",
+      "labels": [
+        "feat",
+        "feature"
+      ]
+    },
+    {
+      "title": "### Fixes",
+      "labels": [
+        "fix",
+        "bug"
+      ]
+    },
+    {
+      "title": "### Dependencies",
+      "labels": [
+        "dependencies",
+        "deps"
+      ]
+    },
+    {
+      "title": "### Documentation",
+      "labels": [
+        "docs",
+        "documentation"
+      ]
+    },
+    {
+      "title": "### Maintenance",
+      "labels": [
+        "chore",
+        "ci",
+        "build",
+        "refactor",
+        "test",
+        "perf",
+        "style",
+        "revert"
+      ]
+    }
+  ],
+  "label_extractor": [
+    {
+      "pattern": "^(feat|fix|docs|chore|ci|build|refactor|test|perf|style|revert)(\\([^)]*\\))?!?:.*$",
+      "on_property": "title",
+      "target": "$1",
+      "flags": "i"
+    }
+  ],
+  "sort": {
+    "order": "ASC",
+    "on_property": "mergedAt"
+  },
+  "ignore_labels": []
+}

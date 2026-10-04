@@ -19,7 +19,7 @@ jobs:
       github.event.pull_request.base.ref == github.event.repository.default_branch
     uses: ./.github/workflows/terraform-ci.yml
 
-  tag:
+  release:
     name: Release / ${{ matrix.module }}
     needs: checks
     runs-on: ubuntu-24.04
@@ -49,6 +49,16 @@ jobs:
             module:
               - 'modules/${{ matrix.module }}/**'
 
+      - name: Normalize the module name for publication
+        id: module-name
+        if: steps.changes.outputs.module == 'true'
+        uses: frabert/replace-string-action@v2.5.2
+        with:
+          string: ${{ matrix.module }}
+          pattern: '[/_]'
+          replace-with: '-'
+          flags: g
+
       - name: Wait for earlier releases before choosing the next version
         if: steps.changes.outputs.module == 'true'
         uses: softprops/turnstyle@v3.3.3
@@ -58,6 +68,7 @@ jobs:
           poll-interval-seconds: 15
 
       - name: Increment this module's version and create its tag
+        id: version
         if: steps.changes.outputs.module == 'true'
         uses: anothrNick/github-tag-action@1.75.0
         env:
@@ -65,10 +76,62 @@ jobs:
           DEFAULT_BUMP: ${{ contains(github.event.pull_request.labels.*.name, 'release:major') && 'major' || contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RELEASE_BRANCHES: '.*'
-          TAG_PREFIX: ${{ matrix.module }}/v
+          TAG_PREFIX: ${{ steps.module-name.outputs.replaced }}-v
           BRANCH_HISTORY: last
           # Labels control the version; disable commit-message bump conventions.
           MAJOR_STRING_TOKEN: ${{ format('__label_only_major_{0}__', github.run_id) }}
           MINOR_STRING_TOKEN: ${{ format('__label_only_minor_{0}__', github.run_id) }}
           PATCH_STRING_TOKEN: ${{ format('__label_only_patch_{0}__', github.run_id) }}
           NONE_STRING_TOKEN: ${{ format('__label_only_none_{0}__', github.run_id) }}
+
+      - name: Build release notes for this module
+        id: notes
+        if: steps.changes.outputs.module == 'true'
+        uses: mikepenz/release-changelog-builder-action@v6.4.0
+        with:
+          configuration: .github/release-notes.json
+          # Every module-changing merge is a release. Bound notes to this PR's
+          # base and merge commits, including on first releases and retries.
+          fromTag: ${{ github.event.pull_request.base.sha }}
+          toTag: ${{ github.event.pull_request.merge_commit_sha }}
+          fetchViaCommits: true
+          includeOnlyPaths: modules/${{ matrix.module }}/
+          failOnError: true
+          configurationJson: |
+            {
+              "base_branches": ["${{ github.event.repository.default_branch }}"]
+            }
+
+      - name: Publish the module's GitHub Release
+        if: steps.changes.outputs.module == 'true'
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          make_latest: false
+          append_body: false
+          body: |
+            ## ${{ steps.module-name.outputs.replaced }}
+
+            Module: `modules/${{ matrix.module }}`
+            Version tag: `${{ steps.version.outputs.tag }}`
+
+            ${{ steps.notes.outputs.changelog }}
+
+            ## Usage
+
+            Set the module source to this version and supply its required inputs:
+
+            ```hcl
+            source = "git::https://github.com/${{ github.repository }}.git//modules/${{ matrix.module }}?ref=${{ steps.version.outputs.tag }}"
+            ```
+
+            [Module documentation](https://github.com/${{ github.repository }}/tree/${{ steps.version.outputs.tag }}/modules/${{ matrix.module }})
+
+            ## Validation
+
+            The merge commit passed the repository CI checks before tagging.
+            Module tests use mocked providers; this does not establish live infrastructure behavior.
+
+            [CI and publication run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
