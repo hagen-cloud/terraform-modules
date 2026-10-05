@@ -1,0 +1,21 @@
+# This is an example of a backend configuration for Terraform using Cloudflare R2 as the backend storage.
+# If you want to use this backend, copy this file to "backend.local.tf" and replace the placeholders with your actual values.
+# If you want to use a different backend, you can remove this file and configure your desired backend in your Terraform configuration.
+terraform {
+  backend "s3" {
+    bucket = "BUCKET-NAME"
+    key    = "cloudflare/module_name/terraform.tfstate"
+    region = "auto"
+
+    endpoints = {
+      s3 = "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
+    }
+
+    use_path_style              = true
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_s3_checksum            = true
+  }
+}
