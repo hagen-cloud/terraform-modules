@@ -55,7 +55,7 @@ jobs:
           tflint_version: '0.64.0'
 
       - name: Check file hygiene, deployment artifacts, and TFLint
-        uses: j178/prek-action@v3.0.0
+        uses: j178/prek-action@v3.0.1
         env:
           SKIP: terraform_fmt,terraform_validate,terraform_trivy,terraform_checkov,terraform_docs
         with:
@@ -130,7 +130,7 @@ jobs:
       - name: Summarize unit test results
         id: test-report
         if: ${{ !cancelled() && steps.tests.outputs.junit-xml-path != '' }}
-        uses: dorny/test-reporter@v3.0.0
+        uses: dorny/test-reporter@v3.2.0
         with:
           name: Unit tests / ${{ matrix.module }}
           report-title: Unit tests / ${{ matrix.module }}
@@ -179,7 +179,7 @@ jobs:
       - name: Scan Terraform and workflow policies
         id: checkov
         if: ${{ !cancelled() }}
-        uses: bridgecrewio/checkov-action@v12.3128.0
+        uses: bridgecrewio/checkov-action@v12.3131.0
         with:
           directory: .
           framework: terraform,github_actions
@@ -206,7 +206,7 @@ jobs:
       - name: Summarize security policy results
         id: security-report
         if: ${{ !cancelled() }}
-        uses: dorny/test-reporter@v3.0.0
+        uses: dorny/test-reporter@v3.2.0
         with:
           name: Security policies / Trivy and Checkov
           report-title: Security policies / Trivy and Checkov
