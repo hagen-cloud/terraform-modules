@@ -179,7 +179,7 @@ jobs:
       - name: Scan Terraform and workflow policies
         id: checkov
         if: ${{ !cancelled() }}
-        uses: bridgecrewio/checkov-action@v12.3135.0
+        uses: bridgecrewio/checkov-action@v12.3139.0
         with:
           directory: .
           framework: terraform,github_actions
